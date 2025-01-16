@@ -1,0 +1,25 @@
+build/
+
+# emacs
+.dir-locals.el
+
+# eclipse setting
+.settings
+
+# vscode
+.vscode
+
+# MacOS directory files
+.DS_Store
+
+# Patch files
+*.patch
+
+#CTags
+tags
+
+# Managed components
+managed_components/*
+
+# Dependency lock files
+dependencies.lock

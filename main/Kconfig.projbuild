@@ -1,0 +1,79 @@
+menu "HAP-Gateway Configuration"
+
+    orsource "$IDF_PATH/examples/common_components/env_caps/$IDF_TARGET/Kconfig.env_caps"
+
+    choice SENSOR_TYPE
+        prompt "Type of sensor"
+        default SENSOR_XIAOMI2
+        help
+            Select the sensor type.
+
+        config SENSOR_XIAOMI2
+            bool "Xiaomi 2 sensor by BLE (LYWSD03MMC)"
+        config SENSOR_DHT11
+            bool "DHT11/12 sensor by GPIO"
+        config SENSOR_DHT22
+            bool "DHT22/21 sensor by GPIO"
+    endchoice
+
+    config SENSOR_GPIO
+        int "Sensor GPIO number"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 4
+        depends on (SENSOR_DHT11 || SENSOR_DHT22)
+        help
+            GPIO number (IOxx) to communicate with DHT11 sensor.
+
+    config BLINK_GPIO
+        int "Blink GPIO number"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 8 if IDF_TARGET_ESP32C3
+        default 2
+        help
+            GPIO number (IOxx) to blink on and off the LED.
+
+    config BOOT_GPIO
+        int "Boot button GPIO number"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_IN_RANGE_MAX
+        default 9 if IDF_TARGET_ESP32C3
+        default 0
+        help
+            GPIO number (IOxx) for BOOT button.
+            Some GPIOs are used for other purposes (flash connections, etc.) and cannot be used.
+
+    config APP_WIFI_SSID
+        string "WiFi SSID"
+        default "your-ssid"
+        help
+            SSID (network name) for the example to connect to.
+
+    config APP_WIFI_PASSWORD
+        string "WiFi Password"
+        default "your-pw"
+        help
+            WiFi password (only WPA2!) for the example to use.
+
+    config EXAMPLE_USE_HARDCODED_SETUP_CODE
+        bool "Use hard-coded setup code"
+        default y
+        help
+            HomeKit does not recommend having the setup code programmed in the accessory as is.
+            Instead, it expects setup info (salt-verifier pair) generated for the given setup code.
+            Use this option only for testing purposes. For production, the setup info should be
+            used.
+
+    config EXAMPLE_SETUP_CODE
+        string "HomeKit Setup Code"
+        default "111-22-333"
+        depends on EXAMPLE_USE_HARDCODED_SETUP_CODE
+        help
+            Setup code to be used for HomeKot pairing, if hard-coded setup code is enabled.
+
+    config EXAMPLE_SETUP_ID
+        string "HomeKit Setup Id"
+        default "X007"
+        depends on EXAMPLE_USE_HARDCODED_SETUP_CODE
+        help
+            Setup id to be used for HomeKot pairing, if hard-coded setup code is enabled.
+
+endmenu
