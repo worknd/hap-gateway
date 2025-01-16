@@ -1,10 +1,10 @@
-# ESP gateway from temperature and humidity sensoe and Apple HomeKit
+# ESP gateway from temperature and humidity sensor and Apple HomeKit
 ## Introduction
 
 [HomeKit](https://developer.apple.com/homekit/) is a framework developed by Apple for communicating with and controlling connected accessories in a user’s home using iOS devices.
 ESP HomeKit SDK has been developed in-house by Espressif to build Apple HomeKit compatible accessories using ESP32/ESP32-S2/ESP32-C3/ESP8266 SoCs.
 
-Features of this gsteway:
+Features of this gateway:
 
 * Support for Xiaomi 2 sensor by BLE (LYWSD03MMC)"
 * Support for DHT11/12 sensor by GPIO"
@@ -39,7 +39,7 @@ As the device boots up and it has found your sensor, you will see QR code for Ho
 
 ### Add acccessory in the Home app
 
-Open the Home app on your iPhone/iPad and follow these steps
+Open the Home app on your iPhone/iPad and follow these steps:
 
 - Tap on "Add Accessory" and scan the QR code mentioned above.
 - Tap on the accessory in the list of Nearby Accessories.
