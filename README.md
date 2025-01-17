@@ -2,7 +2,7 @@
 ## Introduction
 
 [HomeKit](https://developer.apple.com/homekit/) is a framework developed by Apple for communicating with and controlling connected accessories in a user’s home using iOS devices.
-ESP HomeKit SDK has been developed in-house by Espressif to build Apple HomeKit compatible accessories using ESP32/ESP32-S2/ESP32-C3/ESP8266 SoCs.
+[ESP HomeKit SDK](https://github.com/espressif/esp-homekit-sdk/) has been developed in-house by Espressif to build Apple HomeKit compatible accessories using ESP32/ESP32-S2/ESP32-C3/ESP8266 SoCs.
 
 Features of this gateway:
 
