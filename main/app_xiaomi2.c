@@ -59,6 +59,7 @@ enum {
     GET_MODEL_NUM,
     GET_FWREV_NUM,
     GET_HWREV_NUM,
+    GET_SWREV_NUM,
     GET_MNFR_NUM,
     GET_DATA_NUM,
     GET_VALUES
@@ -69,6 +70,7 @@ static const ble_uuid_t *uuids[] = {
     BLE_UUID16_DECLARE(0x2a24), /* Model */
     BLE_UUID16_DECLARE(0x2a26), /* Firmware revision */
     BLE_UUID16_DECLARE(0x2a27), /* Hardware revision */
+    BLE_UUID16_DECLARE(0x2a28), /* Software revision */
     BLE_UUID16_DECLARE(0x2a29), /* Manufacturer */
     BLE_UUID128_DECLARE(0xa6, 0xa3, 0x7d, 0x99, 0xf2, 0x6f, 0x1a, 0x8a, 0x0c, 0x4b, 0x0a, 0x7a, 0xc1, 0xcc, 0xe0, 0xeb)
 };
@@ -163,6 +165,82 @@ static bool get_attr_values(const uint8_t *val, uint16_t len)
     return true;
 }
 
+static int read_attr_callback(uint16_t conn_handle, const struct ble_gatt_error *error,
+    struct ble_gatt_attr *attr, void *arg)
+{
+    uint32_t num = (uint32_t)arg;
+    static uint16_t data_handle = 0;
+    uint16_t om_len;
+
+    ESP_LOGD(TAG, "Read by %u uuid #%lu: handle %u status %d", conn_handle,
+        num, attr ? attr->handle : 0, error->status);
+
+    /* Reading by uuid has second callback call with status BLE_HS_EDONE */
+    if (error->status != 0) {
+        if (num < GET_DATA_NUM) {
+            num++;
+            ESP_ERROR_CHECK(ble_gattc_read_by_uuid(conn_handle,
+                1, 128, uuids[num], read_attr_callback, (void *)num));
+        } else if (num == GET_DATA_NUM && data_handle) {
+            ESP_ERROR_CHECK(ble_gattc_read(conn_handle, data_handle,
+                read_attr_callback, (void *)GET_VALUES));
+        } else {
+            ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        }
+
+        return ESP_OK;
+    }
+
+    om_len = OS_MBUF_PKTLEN(attr->om);
+
+    switch (num) {
+    case GET_NAME_NUM:
+        ble_hs_mbuf_to_flat(attr->om + attr->offset, g_name, MIN(om_len, sizeof(g_name)), NULL);
+        ESP_LOGD(TAG, "NAME %s", g_name);
+        sprintf(g_serial, "%02X%02X%02X%02X%02X%02X",
+            s_addr.val[5], s_addr.val[4], s_addr.val[3],
+            s_addr.val[2], s_addr.val[1], s_addr.val[0]);
+        strcpy(g_model, "LYWSD03MMC");
+        strcpy(g_manufacturer, "Xiaomi");
+        xEventGroupSetBits(s_sensor_event_group, SENSOR_INFO_BIT);
+        break;
+    case GET_MODEL_NUM:
+        ble_hs_mbuf_to_flat(attr->om + attr->offset, g_model, MIN(om_len, sizeof(g_model)), NULL);
+        ESP_LOGD(TAG, "MODEL %s", g_model);
+        break;
+    case GET_FWREV_NUM:
+    case GET_SWREV_NUM:
+        ble_hs_mbuf_to_flat(attr->om + attr->offset, g_fwrev, MIN(om_len, sizeof(g_fwrev)), NULL);
+        fix_revision_string(g_fwrev);
+        ESP_LOGD(TAG, "FWREV %s", g_fwrev);
+        break;
+    case GET_HWREV_NUM:
+        ble_hs_mbuf_to_flat(attr->om + attr->offset, g_hwrev, MIN(om_len, sizeof(g_hwrev)), NULL);
+        fix_revision_string(g_hwrev);
+        ESP_LOGD(TAG, "HWREV %s", g_hwrev);
+        break;
+    case GET_MNFR_NUM:
+        ble_hs_mbuf_to_flat(attr->om + attr->offset, g_manufacturer, MIN(om_len, sizeof(g_manufacturer)), NULL);
+        ESP_LOGD(TAG, "MANUFACTURER %s", g_manufacturer);
+        break;
+    case GET_DATA_NUM:
+        /* Only save attr handle because data in buffer is incorrect by now */
+        data_handle = attr->handle;
+        ESP_LOGD(TAG, "HANDLE %u", data_handle);
+        break;
+    case GET_VALUES:
+        if (get_attr_values(attr->om->om_data + attr->offset, om_len)) {
+            xEventGroupSetBits(s_sensor_event_group, SENSOR_GOT_BIT);
+        }
+        ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        break;
+    default:
+        ESP_LOGW(TAG, "Unknown attr %lu, igonre it", num);
+    }
+
+    return ESP_OK;
+}
+
 /* Custom ATC firmware, see https://github.com/atc1441/ATC_MiThermometer */
 static bool get_advert_values(const uint8_t *val, uint16_t len)
 {
@@ -235,81 +313,6 @@ static bool get_advert_values(const uint8_t *val, uint16_t len)
     led_blink();
 
     return true;
-}
-
-static int read_attr_callback(uint16_t conn_handle, const struct ble_gatt_error *error,
-    struct ble_gatt_attr *attr, void *arg)
-{
-    uint32_t num = (uint32_t)arg;
-    static uint16_t data_handle = 0;
-    uint16_t om_len;
-
-    ESP_LOGD(TAG, "Read by %u uuid #%lu: handle %u status %d", conn_handle,
-        num, attr ? attr->handle : 0, error->status);
-
-    /* Reading by uuid has second callback call with status BLE_HS_EDONE */
-    if (error->status != 0) {
-        if (num < GET_DATA_NUM) {
-            num++;
-            ESP_ERROR_CHECK(ble_gattc_read_by_uuid(conn_handle,
-                1, 128, uuids[num], read_attr_callback, (void *)num));
-        } else if (num == GET_DATA_NUM && data_handle) {
-            ESP_ERROR_CHECK(ble_gattc_read(conn_handle, data_handle,
-                read_attr_callback, (void *)GET_VALUES));
-        } else {
-            ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
-        }
-
-        return ESP_OK;
-    }
-
-    om_len = OS_MBUF_PKTLEN(attr->om);
-
-    switch (num) {
-    case GET_NAME_NUM:
-        ble_hs_mbuf_to_flat(attr->om + attr->offset, g_name, MIN(om_len, sizeof(g_name)), NULL);
-        ESP_LOGD(TAG, "NAME %s", g_name);
-        sprintf(g_serial, "%02X%02X%02X%02X%02X%02X",
-            s_addr.val[5], s_addr.val[4], s_addr.val[3],
-            s_addr.val[2], s_addr.val[1], s_addr.val[0]);
-        strcpy(g_model, "LYWSD03MMC");
-        strcpy(g_manufacturer, "Xiaomi");
-        xEventGroupSetBits(s_sensor_event_group, SENSOR_INFO_BIT);
-        break;
-    case GET_MODEL_NUM:
-        ble_hs_mbuf_to_flat(attr->om + attr->offset, g_model, MIN(om_len, sizeof(g_model)), NULL);
-        ESP_LOGD(TAG, "MODEL %s", g_model);
-        break;
-    case GET_FWREV_NUM:
-        ble_hs_mbuf_to_flat(attr->om + attr->offset, g_fwrev, MIN(om_len, sizeof(g_fwrev)), NULL);
-        fix_revision_string(g_fwrev);
-        ESP_LOGD(TAG, "FWREV %s", g_fwrev);
-        break;
-    case GET_HWREV_NUM:
-        ble_hs_mbuf_to_flat(attr->om + attr->offset, g_hwrev, MIN(om_len, sizeof(g_hwrev)), NULL);
-        fix_revision_string(g_hwrev);
-        ESP_LOGD(TAG, "HWREV %s", g_hwrev);
-        break;
-    case GET_MNFR_NUM:
-        ble_hs_mbuf_to_flat(attr->om + attr->offset, g_manufacturer, MIN(om_len, sizeof(g_manufacturer)), NULL);
-        ESP_LOGD(TAG, "MANUFACTURER %s", g_manufacturer);
-        break;
-    case GET_DATA_NUM:
-        /* Only save attr handle because data in buffer is incorrect by now */
-        data_handle = attr->handle;
-        ESP_LOGD(TAG, "HANDLE %u", data_handle);
-        break;
-    case GET_VALUES:
-        if (get_attr_values(attr->om->om_data + attr->offset, om_len)) {
-            xEventGroupSetBits(s_sensor_event_group, SENSOR_GOT_BIT);
-        }
-        ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
-        break;
-    default:
-        ESP_LOGW(TAG, "Unknown attr %lu, igonre it", num);
-    }
-
-    return ESP_OK;
 }
 
 static bool is_sensor_found(struct ble_gap_disc_desc *disc)

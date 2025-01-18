@@ -41,9 +41,9 @@ extern void app_sensor_reset(bool full);
 char g_name[32] = "?";
 char g_manufacturer[32] = "?";
 char g_model[32] = "?";
-char g_serial[16]= "1";
-char g_fwrev[16] = "1";
-char g_hwrev[16] = "1";
+char g_serial[16]= "A";
+char g_fwrev[16] = "0";
+char g_hwrev[16] = "0";
 
 float g_temperature = 0.0;
 float g_humidity = 50.0;
