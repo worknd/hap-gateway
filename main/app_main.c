@@ -15,6 +15,21 @@
 #include <iot_button.h>
 #include <qrcode.h>
 
+#define HGW_TASK_PRIORITY  1
+#define HGW_TASK_STACKSIZE 6 * 1024
+
+/* Reset network credentials if button is pressed for more than 3 seconds and then released */
+#define RESET_NETWORK_BUTTON_TIMEOUT        3
+
+/* Reset to factory if button is pressed and held for more than 10 seconds */
+#define RESET_TO_FACTORY_BUTTON_TIMEOUT     10
+
+/* The button "Boot" will be used as the Reset button for the example */
+#define RESET_GPIO  CONFIG_BOOT_GPIO
+
+/* Define status of "low battery" as less 10% battery level */
+#define LOW_BATTERY(level) ((level) < 10 ? 1 : 0)
+
 extern void hap_configure_unique_param(hap_unique_param_t param);
 
 extern void app_wifi_init(void);
@@ -35,21 +50,6 @@ float g_humidity = 50.0;
 uint32_t g_battery = 100;
 
 static const char *TAG = "HGW";
-
-#define HGW_TASK_PRIORITY  1
-#define HGW_TASK_STACKSIZE 6 * 1024
-
-/* Reset network credentials if button is pressed for more than 3 seconds and then released */
-#define RESET_NETWORK_BUTTON_TIMEOUT        3
-
-/* Reset to factory if button is pressed and held for more than 10 seconds */
-#define RESET_TO_FACTORY_BUTTON_TIMEOUT     10
-
-/* The button "Boot" will be used as the Reset button for the example */
-#define RESET_GPIO  CONFIG_BOOT_GPIO
-
-/* Define status of "low battery" as less 10% battery level */
-#define LOW_BATTERY(level) ((level) < 10 ? 1 : 0)
 
 void led_blink(void)
 {
@@ -94,7 +94,7 @@ void change_temperature(float temperature)
         if (chr) {
             hap_val_t new_val = { .f = g_temperature };
             hap_char_update_val(chr, &new_val);
-            ESP_LOGD(TAG, "Updated temperature value: %f", new_val.f);
+            ESP_LOGW(TAG, "Updated temperature value: %f", new_val.f);
         }
     }
 }
@@ -120,7 +120,7 @@ void change_humidity(float humidity)
         if (chr) {
             hap_val_t new_val = { .f = g_humidity };
             hap_char_update_val(chr, &new_val);
-            ESP_LOGD(TAG, "Updated humidity value: %f", new_val.f);
+            ESP_LOGW(TAG, "Updated humidity value: %f", new_val.f);
         }
     }
 }
@@ -147,7 +147,7 @@ void change_battery(uint32_t battery)
         if (chr) {
             hap_val_t new_val = { .u = g_battery };
             hap_char_update_val(chr, &new_val);
-            ESP_LOGD(TAG, "Updated battery level: %lu", new_val.u);
+            ESP_LOGW(TAG, "Updated battery level: %lu", new_val.u);
         }
 
         if (LOW_BATTERY(g_battery) != status_low) {
@@ -155,7 +155,7 @@ void change_battery(uint32_t battery)
             if (chr) {
                 hap_val_t new_val = { .u = LOW_BATTERY(g_battery) };
                 hap_char_update_val(chr, &new_val);
-                ESP_LOGD(TAG, "Updated low battery status: %lu", new_val.u);
+                ESP_LOGW(TAG, "Updated low battery status: %lu", new_val.u);
             }
         }
     }
@@ -268,26 +268,26 @@ static int hgw_read(hap_char_t *hc, hap_status_t *status_code, void *serv_priv, 
         if (cur_val->f != g_temperature) {
             hap_val_t new_val = { .f = g_temperature };
             hap_char_update_val(hc, &new_val);
-            ESP_LOGD(TAG, "Updated temperature value: %f", new_val.f);
+            ESP_LOGW(TAG, "Updated temperature value: %f", new_val.f);
         }
     } else if (!strcmp(chr_uuid, HAP_CHAR_UUID_CURRENT_RELATIVE_HUMIDITY)) {
         if (cur_val->f != g_humidity) {
             hap_val_t new_val = { .f = g_humidity };
             hap_char_update_val(hc, &new_val);
-            ESP_LOGD(TAG, "Updated humidity value: %f", new_val.f);
+            ESP_LOGW(TAG, "Updated humidity value: %f", new_val.f);
         }
     } else if (!strcmp(chr_uuid, HAP_CHAR_UUID_BATTERY_LEVEL)) {
         if (cur_val->u != g_battery) {
             hap_val_t new_val = { .u = g_battery };
             hap_char_update_val(hc, &new_val);
-            ESP_LOGD(TAG, "Updated battery level: %lu", new_val.u);
+            ESP_LOGW(TAG, "Updated battery level: %lu", new_val.u);
         }
     } else if (!strcmp(chr_uuid, HAP_CHAR_UUID_STATUS_LOW_BATTERY)) {
         uint32_t status_low = LOW_BATTERY(g_battery);
         if (cur_val->u != status_low) {
             hap_val_t new_val = { .u = status_low };
             hap_char_update_val(hc, &new_val);
-            ESP_LOGD(TAG, "Updated low battery status: %lu", new_val.u);
+            ESP_LOGW(TAG, "Updated low battery status: %lu", new_val.u);
         }
     } else if (!strcmp(chr_uuid, HAP_CHAR_UUID_CHARGING_STATE)) {
         ESP_LOGD(TAG, "Charging State not updated");

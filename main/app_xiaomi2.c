@@ -21,7 +21,7 @@
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #endif
 
-#define SENSOR_GET_TIMEOUT (10 * 60 * 1000000) /* 10 minutes in microseconds */
+#define SENSOR_GET_TIMEOUT (60 * 1000000) /* 1 minute in microseconds */
 
 #define SENSOR_FOUND_BIT BIT0
 #define SENSOR_INFO_BIT  BIT1
@@ -30,8 +30,15 @@
 #define SENSOR_KEYSTORE  "sensor"
 #define SENSOR_ADDR_KEY  "address"
 
+#define MI_UUID_0  0x95
+#define MI_UUID_1  0xfe
+#define ATC_UUID_0 0x1a
+#define ATC_UUID_1 0x18
+
 #define MAX_VBAT_MV 3000 /* 100% */
 #define MIN_VBAT_MV 2200 /* 0% */
+
+static const char *TAG = "MI2";
 
 extern char g_name[32];
 extern char g_manufacturer[32];
@@ -44,8 +51,6 @@ extern void led_blink(void);
 extern void change_temperature(float temperature);
 extern void change_humidity(float humidity);
 extern void change_battery(uint32_t battery);
-
-static const char *TAG = "MI2";
 
 static ble_addr_t s_addr = {BLE_ADDR_PUBLIC};
 
@@ -115,7 +120,8 @@ static void fix_revision_string(char *str)
     }
 }
 
-static bool get_sensor_values(const uint8_t *val, uint16_t len)
+/* Original Mi format, firmware version 1.0.0130 */
+static bool get_attr_values(const uint8_t *val, uint16_t len)
 {
     uint16_t raw_temp, mv;
     uint32_t battery;
@@ -146,7 +152,7 @@ static bool get_sensor_values(const uint8_t *val, uint16_t len)
     else
         battery = (mv - MIN_VBAT_MV) / ((MAX_VBAT_MV - MIN_VBAT_MV) / 100);
 
-    ESP_LOGD(TAG, "Temperature/Humidity=%f/%f Battery=%lu", temperature, humidity, battery);
+    ESP_LOGW(TAG, "Temperature/Humidity=%f/%f Battery=%lu", temperature, humidity, battery);
 
     change_temperature(temperature);
     change_humidity(humidity);
@@ -157,38 +163,103 @@ static bool get_sensor_values(const uint8_t *val, uint16_t len)
     return true;
 }
 
+/* Custom ATC firmware, see https://github.com/atc1441/ATC_MiThermometer */
+static bool get_advert_values(const uint8_t *val, uint16_t len)
+{
+    float temperature, humidity;
+    uint32_t battery;
+
+    if (val[0] == MI_UUID_0) {
+        /* Mi like format */
+        if (len < 20) {
+            ESP_LOGD(TAG, "Incorrect data size");
+            return false;
+        }
+
+        ESP_LOGD(TAG, "Raw Mi data: %02x %02x %02x %02x %02x %02x %02x",
+            val[13], val[14], val[15], val[16], val[17], val[18], val[19]);
+
+        if (val[13] == 0x0d) {
+            temperature = (float)(val[16] | (uint16_t)(val[17] & 0x7f) << 8) * 0.1;
+            humidity = (float)((val[18] | (uint16_t)val[19] << 8) / 10);
+
+            if (temperature > 100.0 || humidity > 100.0) {
+                ESP_LOGD(TAG, "Incorrect sensor values");
+                return false;
+            }
+
+            ESP_LOGW(TAG, "Temperature/Humidity=%f/%f",
+                temperature, humidity);
+
+            change_temperature(temperature);
+            change_humidity(humidity);
+        } else {
+            battery = val[16];
+
+            if (battery > 100) {
+                ESP_LOGD(TAG, "Incorrect sensor values");
+                return false;
+            }
+
+            ESP_LOGW(TAG, "Battery=%lu", battery);
+
+            change_battery(battery);
+        }
+    } else {
+        /* Custom format */
+        if (len < 11) {
+            ESP_LOGD(TAG, "Incorrect data size");
+            return false;
+        }
+
+        ESP_LOGD(TAG, "Raw ATC data: %02x %02x %02x %02x",
+            val[8], val[9], val[10], val[11]);
+
+        temperature = (float)(val[9] | (uint16_t)(val[8] & 0x7f) << 8) * 0.1;
+        humidity = (float)val[10];
+        battery = val[11];
+
+        if (temperature > 100.0 || humidity > 100.0 || battery > 100) {
+            ESP_LOGD(TAG, "Incorrect sensor values");
+            return false;
+        }
+
+        ESP_LOGW(TAG, "Temperature/Humidity=%f/%f Battery=%lu",
+            temperature, humidity, battery);
+
+        change_temperature(temperature);
+        change_humidity(humidity);
+        change_battery(battery);
+    }
+
+    led_blink();
+
+    return true;
+}
+
 static int read_attr_callback(uint16_t conn_handle, const struct ble_gatt_error *error,
     struct ble_gatt_attr *attr, void *arg)
 {
     uint32_t num = (uint32_t)arg;
-    static uint16_t data_handle;
+    static uint16_t data_handle = 0;
     uint16_t om_len;
 
     ESP_LOGD(TAG, "Read by %u uuid #%lu: handle %u status %d", conn_handle,
         num, attr ? attr->handle : 0, error->status);
 
-    /* Reading by uuid has second callback call! */
-    if (error->status == BLE_HS_EDONE) {
-#if CONFIG_LOG_DEFAULT_LEVEL >= ESP_LOG_DEBUG
-        char buffer[BLE_UUID_STR_LEN];
-        ESP_LOGD(TAG, "Reading %s done", ble_uuid_to_str(uuids[num], buffer));
-#endif /* CONFIG_LOG_DEFAULT_LEVEL >= ESP_LOG_DEBUG */
-
+    /* Reading by uuid has second callback call with status BLE_HS_EDONE */
+    if (error->status != 0) {
         if (num < GET_DATA_NUM) {
             num++;
             ESP_ERROR_CHECK(ble_gattc_read_by_uuid(conn_handle,
                 1, 128, uuids[num], read_attr_callback, (void *)num));
-        } else {
+        } else if (num == GET_DATA_NUM && data_handle) {
             ESP_ERROR_CHECK(ble_gattc_read(conn_handle, data_handle,
                 read_attr_callback, (void *)GET_VALUES));
+        } else {
+            ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
         }
 
-        return ESP_OK;
-    }
-
-    if (error->status != 0) {
-        ESP_LOGW(TAG, "Read error, status %d!", error->status);
-        ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
         return ESP_OK;
     }
 
@@ -198,6 +269,12 @@ static int read_attr_callback(uint16_t conn_handle, const struct ble_gatt_error 
     case GET_NAME_NUM:
         ble_hs_mbuf_to_flat(attr->om + attr->offset, g_name, MIN(om_len, sizeof(g_name)), NULL);
         ESP_LOGD(TAG, "NAME %s", g_name);
+        sprintf(g_serial, "%02X%02X%02X%02X%02X%02X",
+            s_addr.val[5], s_addr.val[4], s_addr.val[3],
+            s_addr.val[2], s_addr.val[1], s_addr.val[0]);
+        strcpy(g_model, "LYWSD03MMC");
+        strcpy(g_manufacturer, "Xiaomi");
+        xEventGroupSetBits(s_sensor_event_group, SENSOR_INFO_BIT);
         break;
     case GET_MODEL_NUM:
         ble_hs_mbuf_to_flat(attr->om + attr->offset, g_model, MIN(om_len, sizeof(g_model)), NULL);
@@ -216,11 +293,6 @@ static int read_attr_callback(uint16_t conn_handle, const struct ble_gatt_error 
     case GET_MNFR_NUM:
         ble_hs_mbuf_to_flat(attr->om + attr->offset, g_manufacturer, MIN(om_len, sizeof(g_manufacturer)), NULL);
         ESP_LOGD(TAG, "MANUFACTURER %s", g_manufacturer);
-        sprintf(g_serial, "%02X%02X%02X%02X%02X%02X",
-            s_addr.val[5], s_addr.val[4], s_addr.val[3],
-            s_addr.val[2], s_addr.val[1], s_addr.val[0]);
-        ESP_LOGD(TAG, "SERIAL %s", g_serial);
-        xEventGroupSetBits(s_sensor_event_group, SENSOR_INFO_BIT);
         break;
     case GET_DATA_NUM:
         /* Only save attr handle because data in buffer is incorrect by now */
@@ -228,7 +300,7 @@ static int read_attr_callback(uint16_t conn_handle, const struct ble_gatt_error 
         ESP_LOGD(TAG, "HANDLE %u", data_handle);
         break;
     case GET_VALUES:
-        if (get_sensor_values(attr->om->om_data + attr->offset, om_len)) {
+        if (get_attr_values(attr->om->om_data + attr->offset, om_len)) {
             xEventGroupSetBits(s_sensor_event_group, SENSOR_GOT_BIT);
         }
         ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
@@ -249,25 +321,29 @@ static bool is_sensor_found(struct ble_gap_disc_desc *disc)
         disc->addr.val[2], disc->addr.val[1], disc->addr.val[0]);
 
     if (xEventGroupGetBits(s_sensor_event_group) & SENSOR_FOUND_BIT) {
-        return !memcmp(&s_addr, &disc->addr, sizeof(s_addr));
+        if (memcmp(&s_addr, &disc->addr, sizeof(s_addr)))
+            return false;
+    } else {
+        if (disc->addr.val[5] != 0xa4 ||
+        disc->addr.val[4] != 0xc1 || disc->addr.val[3] != 0x38)
+            return false;
     }
-
-    if (disc->addr.val[5] != 0xa4 ||
-    disc->addr.val[4] != 0xc1 || disc->addr.val[3] != 0x38)
-        return false;
 
     if (ble_hs_adv_parse_fields(&fields, disc->data, disc->length_data) != ESP_OK)
         return false;
 
+    /* Advertisment data in original Mi or ATC custom format */
     if (fields.svc_data_uuid16 == NULL || fields.svc_data_uuid16_len < 14 ||
-    fields.svc_data_uuid16[0] != 0x95 || fields.svc_data_uuid16[1] != 0xfe)
-        return false;
-
-    if (memcmp(disc->addr.val, &fields.svc_data_uuid16[7], BLE_DEV_ADDR_LEN))
+    ((fields.svc_data_uuid16[0] != MI_UUID_0 || fields.svc_data_uuid16[1] != MI_UUID_1) &&
+    (fields.svc_data_uuid16[0] != ATC_UUID_0 || fields.svc_data_uuid16[1] != ATC_UUID_1)))
         return false;
 
     memcpy(&s_addr, &disc->addr, sizeof(s_addr));
     xEventGroupSetBits(s_sensor_event_group, SENSOR_FOUND_BIT);
+
+    /* Also try to get sensor values from the adevertisment data */
+    if (get_advert_values(fields.svc_data_uuid16, fields.svc_data_uuid16_len))
+        xEventGroupSetBits(s_sensor_event_group, SENSOR_GOT_BIT);
 
     return true;
 }
@@ -299,8 +375,8 @@ static void start_ble_scan(void)
     disc_params.filter_policy = 0;
     disc_params.limited = 0;
 
-    /* 60 sec for discovery */
-    ESP_ERROR_CHECK(ble_gap_disc(own_addr_type, 60000,
+    /* 30 sec for discovery */
+    ESP_ERROR_CHECK(ble_gap_disc(own_addr_type, 30000,
         &disc_params, event_ble_handler, NULL));
 }
 
@@ -313,14 +389,19 @@ static void start_ble_connect(void)
         ESP_ERROR_CHECK(ble_gap_disc_cancel());
     }
 
+    /* But does connection really need now? */
+    if (xEventGroupGetBits(s_sensor_event_group) ==
+    (SENSOR_FOUND_BIT | SENSOR_INFO_BIT | SENSOR_GOT_BIT))
+        return;
+
     /* Figure out public address */
     ESP_ERROR_CHECK(ble_hs_id_infer_auto(BLE_ADDR_PUBLIC, &own_addr_type));
 
     ESP_LOGD(TAG, "Start to connect to sensor...");
 
-    /* 30 sec for connection */
+    /* 20 sec for connection */
     ESP_ERROR_CHECK(ble_gap_connect(own_addr_type, &s_addr,
-        30000, NULL, event_ble_handler, NULL));
+        20000, NULL, event_ble_handler, NULL));
 }
 
 static int event_ble_handler(struct ble_gap_event *event, void *arg)
@@ -397,15 +478,10 @@ static void on_timer(void* arg)
 {
     ESP_LOGD(TAG, "Time to refresh sensor values");
 
-    if (xEventGroupGetBits(s_sensor_event_group) & SENSOR_FOUND_BIT) {
-        if (!ble_gap_conn_active()) {
-            xEventGroupClearBits(s_sensor_event_group, SENSOR_GOT_BIT);
-            start_ble_connect();
-        }
-    } else {
-        if (!ble_gap_disc_active()) {
-            start_ble_scan();
-        }
+    xEventGroupClearBits(s_sensor_event_group, SENSOR_GOT_BIT);
+
+    if (!ble_gap_disc_active()) {
+        start_ble_scan();
     }
 }
 
@@ -413,11 +489,10 @@ static void host_nimble_task(void *param)
 {
     ESP_LOGD(TAG, "BLE host task started.");
 
-    /* The function will return only when nimble_port_stop() is executed */
+    /* The function must never return */
     nimble_port_run();
 
-    ESP_LOGW(TAG, "BLE host task finished.");
-    nimble_port_freertos_deinit();
+    ESP_LOGE(TAG, "BLE host task finished.");
 }
 
 esp_err_t app_sensor_init(TickType_t ticks_to_wait)

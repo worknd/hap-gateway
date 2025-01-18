@@ -104,7 +104,7 @@ static bool get_sensor_values(void)
         return false;
     }
 
-    ESP_LOGD(TAG, "Temperature/Humidity=%f/%f", temperature, humidity);
+    ESP_LOGW(TAG, "Temperature/Humidity=%f/%f", temperature, humidity);
 
     change_temperature(temperature);
     change_humidity(humidity);
