@@ -41,9 +41,9 @@ extern void app_sensor_reset(bool full);
 char g_name[32] = "?";
 char g_manufacturer[32] = "?";
 char g_model[32] = "?";
-char g_serial[16]= "A";
-char g_fwrev[16] = "0";
-char g_hwrev[16] = "0";
+char g_serial[16]= "A1";
+char g_fwrev[16] = "1";
+char g_hwrev[16] = "1";
 
 float g_temperature = 0.0;
 float g_humidity = 50.0;
@@ -326,15 +326,16 @@ static void hgw_thread_entry(void *arg)
     /* Create accessory object */
     accessory = hap_acc_create(&cfg);
 
-    /* Add a dummy Product Data */
-    uint8_t product_data[] = {'E','S','P','3','2','H','A','P'};
-    hap_acc_add_product_data(accessory, product_data, sizeof(product_data));
+    /* Add a accessory product data */
+    hap_acc_add_product_data(accessory, (uint8_t *)"esp32hgw", 8);
 
     /* Add Wi-Fi Transport service required for HAP Spec R16 */
     hap_acc_add_wifi_transport_service(accessory, 0);
 
     /* Create the Services. Include the "name" since this is a user visible service  */
     temperature_service = hap_serv_temperature_sensor_create(g_temperature);
+    hap_char_float_set_constraints(hap_serv_get_char_by_uuid(temperature_service,
+        HAP_CHAR_UUID_CURRENT_TEMPERATURE), -50.0, 100.0, 0.1); /* Lowest value is -50.0 */
     hap_serv_add_char(temperature_service, hap_char_status_low_battery_create(LOW_BATTERY(g_battery)));
     humidity_service = hap_serv_humidity_sensor_create(g_humidity);
     hap_serv_add_char(temperature_service, hap_char_status_low_battery_create(LOW_BATTERY(g_battery)));
@@ -370,10 +371,11 @@ static void hgw_thread_entry(void *arg)
 
     /* Unique Setup code of the format xxx-xx-xxx. Default: 111-22-333 */
     hap_set_setup_code(CONFIG_EXAMPLE_SETUP_CODE);
-    /* Unique four character Setup Id. Default: ES32 */
+    /* Unique four character Setup Id. Default: ND01 */
     hap_set_setup_id(CONFIG_EXAMPLE_SETUP_ID);
     /* Make payload QR code */
-    setup_payload = esp_hap_get_setup_payload(CONFIG_EXAMPLE_SETUP_CODE, CONFIG_EXAMPLE_SETUP_ID, false, cfg.cid);
+    setup_payload = esp_hap_get_setup_payload(CONFIG_EXAMPLE_SETUP_CODE,
+        CONFIG_EXAMPLE_SETUP_ID, false, cfg.cid);
     if (setup_payload) {
         ESP_LOGI(TAG, "-----QR Code for HomeKit (%s)-----", setup_payload);
         qrcode_display(setup_payload);
