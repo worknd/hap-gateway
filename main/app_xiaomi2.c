@@ -1,6 +1,5 @@
 /* Support for Xiaomi2 temperature and humidity BLE sensor (LYWSD03MMC) */
 
-#include <stdio.h>
 #include <string.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -125,8 +124,7 @@ static void fix_revision_string(char *str)
 /* Original Mi format, firmware version 1.0.0130 */
 static bool get_attr_values(const uint8_t *val, uint16_t len)
 {
-    uint16_t raw_temp, mv;
-    uint32_t battery;
+    uint32_t mv, battery;
     float temperature, humidity;
 
     if (len < 5) {
@@ -137,11 +135,11 @@ static bool get_attr_values(const uint8_t *val, uint16_t len)
     ESP_LOGD(TAG, "Raw data: %02x %02x %02x %02x %02x",
         val[0], val[1], val[2], val[3], val[4]);
 
-    raw_temp = val[0] | (uint16_t)(val[1] & 0x7f) << 8;
-    temperature = (float)(raw_temp / 100) + (float)((raw_temp % 100) / 10) * 0.1;
-    humidity = (float)val[2];
+    temperature = (((val[0] | (int16_t)(val[1] & 0x7f) << 8)
+        - (val[1] & 0x80 ? 32767 : 0)) / 10) * 0.1;
+    humidity = val[2];
 
-    if (temperature > 100.0 || humidity > 100.0) {
+    if (temperature > 100.0 || temperature < -50.0 || humidity > 100.0) {
         ESP_LOGD(TAG, "Incorrect sensor values");
         return false;
     }
@@ -181,6 +179,8 @@ static int read_attr_callback(uint16_t conn_handle, const struct ble_gatt_error 
             num++;
             ESP_ERROR_CHECK(ble_gattc_read_by_uuid(conn_handle,
                 1, 128, uuids[num], read_attr_callback, (void *)num));
+            if (num == GET_DATA_NUM)
+                xEventGroupSetBits(s_sensor_event_group, SENSOR_INFO_BIT);
         } else if (num == GET_DATA_NUM && data_handle) {
             ESP_ERROR_CHECK(ble_gattc_read(conn_handle, data_handle,
                 read_attr_callback, (void *)GET_VALUES));
@@ -202,7 +202,6 @@ static int read_attr_callback(uint16_t conn_handle, const struct ble_gatt_error 
             s_addr.val[2], s_addr.val[1], s_addr.val[0]);
         strcpy(g_model, "LYWSD03MMC");
         strcpy(g_manufacturer, "Xiaomi");
-        xEventGroupSetBits(s_sensor_event_group, SENSOR_INFO_BIT);
         break;
     case GET_MODEL_NUM:
         ble_hs_mbuf_to_flat(attr->om + attr->offset, g_model, MIN(om_len, sizeof(g_model)), NULL);
@@ -258,10 +257,11 @@ static bool get_advert_values(const uint8_t *val, uint16_t len)
             val[13], val[14], val[15], val[16], val[17], val[18], val[19]);
 
         if (val[13] == 0x0d) {
-            temperature = (float)(val[16] | (uint16_t)(val[17] & 0x7f) << 8) * 0.1;
-            humidity = (float)((val[18] | (uint16_t)val[19] << 8) / 10);
+            temperature = ((val[16] | (int16_t)(val[17] & 0x7f) << 8)
+                - (val[17] & 0x80 ? 32767 : 0)) * 0.1;
+            humidity = (val[18] | (uint16_t)val[19] << 8) / 10;
 
-            if (temperature > 100.0 || humidity > 100.0) {
+            if (temperature > 100.0 || temperature < -50.0 || humidity > 100.0) {
                 ESP_LOGD(TAG, "Incorrect sensor values");
                 return false;
             }

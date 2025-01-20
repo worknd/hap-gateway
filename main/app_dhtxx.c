@@ -1,6 +1,5 @@
 /* Support for DTH11/12/21/22 temperature and humidity GPIO sensor */
 
-#include <stdio.h>
 #include <string.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -24,10 +23,10 @@ void app_sensor_addr_save(void)
 {
 }
 
-static uint32_t wait_gpio_level(uint32_t usec, uint32_t level)
+static uint32_t wait_gpio_level(gpio_num_t gpio_num, uint32_t usec, uint32_t level)
 {
     for (uint32_t i = 1; i <= usec; i++) {
-        if (gpio_get_level(CONFIG_SENSOR_GPIO) != level)
+        if (gpio_get_level(gpio_num) != level)
             return i;
 
         ets_delay_us(1);
@@ -36,49 +35,49 @@ static uint32_t wait_gpio_level(uint32_t usec, uint32_t level)
     return 0;
 }
 
-static bool get_sensor_values(void)
+static bool get_sensor_values(gpio_num_t gpio_num)
 {
     TickType_t ticks;
     uint8_t val[5] = { 0, 0, 0, 0, 0 };
     float temperature, humidity;
 
     /* At first we send start signal to sensor */
-    gpio_reset_pin(CONFIG_SENSOR_GPIO);
-    gpio_set_direction(CONFIG_SENSOR_GPIO, GPIO_MODE_OUTPUT);
+    gpio_reset_pin(gpio_num);
+    gpio_set_direction(gpio_num, GPIO_MODE_OUTPUT);
 
     /* Low level ~18ms */
     ticks = xTaskGetTickCount();
-    gpio_set_level(CONFIG_SENSOR_GPIO, 0);
+    gpio_set_level(gpio_num, 0);
     vTaskDelayUntil(&ticks, pdMS_TO_TICKS(20));
 
     /* High level ~20-40us */
-    gpio_set_level(CONFIG_SENSOR_GPIO, 1);
+    gpio_set_level(gpio_num, 1);
     ets_delay_us(40);
 
     /* Receive response from sensor */
-    gpio_set_direction(CONFIG_SENSOR_GPIO, GPIO_MODE_INPUT);
+    gpio_set_direction(gpio_num, GPIO_MODE_INPUT);
 
     /* Wait for next step ~80us */
-    if (!wait_gpio_level(85, 0)) {
+    if (!wait_gpio_level(gpio_num, 85, 0)) {
         ESP_LOGD(TAG, "Incorrect start low level");
         return false;
     }
 
     /* Wait for next step ~80us */
-    if (!wait_gpio_level(85, 1)) {
+    if (!wait_gpio_level(gpio_num, 85, 1)) {
         ESP_LOGD(TAG, "Incorrect start high level");
         return false;
     }
 
     for(uint32_t i = 0; i < 40; i++) {
         /* Wait for every bit ~50us */
-        if (!wait_gpio_level(55, 0)) {
+        if (!wait_gpio_level(gpio_num, 55, 0)) {
             ESP_LOGD(TAG, "Incorrect bit %lu", i);
             return false;
         }
 
         /* bit0 = ~26-28us, bit1 = ~70us */
-        if (wait_gpio_level(75, 1) > 30) {
+        if (wait_gpio_level(gpio_num, 75, 1) > 30) {
             val[i / 8] |= 1 << (7 - i % 8);
         }
     }
@@ -92,14 +91,19 @@ static bool get_sensor_values(void)
     }
 
 #ifdef CONFIG_SENSOR_DHT11
-    temperature = (float)val[2] + (float)(val[3] % 10) * 0.1;
-    humidity = (float)val[0];
+    temperature = val[2];
+    if (val[3] & 0x80)
+        temperature = -1.0 - temperature;
+    temperature += (val[3] & 0x0f) * 0.1;
+    humidity = val[0] + val[1] / 10;
 #else /* CONFIG_SENSOR_DHT11 */
-    temperature = (float)(val[3] | (uint16_t)val[2] << 8) * 0.1;
-    humidity = (float)((val[1] | (uint16_t)val[0] << 8) / 10);
+    temperature = (val[3] | (uint16_t)(val[2] & 0x7f) << 8) * 0.1;
+    if (val[2] & 0x80)
+        temperature = -temperature;
+    humidity = (val[1] | (uint16_t)val[0] << 8) / 10;
 #endif /* CONFIG_SENSOR_DHT11 */
 
-    if (temperature > 100.0 || humidity > 100.0) {
+    if (temperature > 100.0 || temperature < -50.0 || humidity > 100.0) {
         ESP_LOGD(TAG, "Incorrect sensor values");
         return false;
     }
@@ -118,7 +122,7 @@ static void on_timer(void* arg)
 {
     ESP_LOGD(TAG, "Time to refresh sensor values");
 
-    get_sensor_values();
+    get_sensor_values(CONFIG_SENSOR_GPIO);
 }
 
 esp_err_t app_sensor_init(TickType_t ticks_to_wait)
@@ -132,7 +136,7 @@ esp_err_t app_sensor_init(TickType_t ticks_to_wait)
 
     ESP_LOGD(TAG, "Init connection to sensor");
 
-    while (!get_sensor_values()) {
+    while (!get_sensor_values(CONFIG_SENSOR_GPIO)) {
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 
