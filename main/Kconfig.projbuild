@@ -41,6 +41,13 @@ menu "HAP-Gateway Configuration"
             GPIO number (IOxx) for BOOT button.
             Some GPIOs are used for other purposes (flash connections, etc.) and cannot be used.
 
+    config SENSOR_INQUERY_TIMEOUT
+        int "Sensor inquery timeout in minutes"
+        range 1 30
+        default 1
+        help
+            Timeout for pereodic refreshing sensor values in minutes.
+
     config APP_WIFI_SSID
         string "WiFi SSID"
         default "your-ssid"
@@ -71,7 +78,7 @@ menu "HAP-Gateway Configuration"
 
     config EXAMPLE_SETUP_ID
         string "HomeKit Setup Id"
-        default "X007"
+        default "ND01"
         depends on EXAMPLE_USE_HARDCODED_SETUP_CODE
         help
             Setup id to be used for HomeKot pairing, if hard-coded setup code is enabled.

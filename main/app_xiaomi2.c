@@ -20,7 +20,8 @@
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #endif
 
-#define SENSOR_GET_TIMEOUT (60 * 1000000) /* 1 minute in microseconds */
+/* Convert minutes in microseconds */
+#define SENSOR_GET_TIMEOUT (CONFIG_SENSOR_INQUERY_TIMEOUT * 60 * 1000000)
 
 #define SENSOR_FOUND_BIT BIT0
 #define SENSOR_INFO_BIT  BIT1
@@ -115,10 +116,15 @@ static void fix_revision_string(char *str)
 
     /* Remove all symbols except dot or digits */
     for (uint16_t i = 0; i <= strlen(str); i++) {
-        if (!str[i] || str[i] == '.' || (str[i] >= '0' && str[i] <= '9')) {
+        if (!str[i] || (str[i] == '.' && p != str) ||
+        (str[i] >= '0' && str[i] <= '9')) {
             *p++ = str[i];
         }
     }
+
+    /* Apple revision string length can not be zero */
+    if (--p == str)
+        strcpy(str, "1");
 }
 
 /* Original Mi format, firmware version 1.0.0130 */
@@ -135,8 +141,8 @@ static bool get_attr_values(const uint8_t *val, uint16_t len)
     ESP_LOGD(TAG, "Raw data: %02x %02x %02x %02x %02x",
         val[0], val[1], val[2], val[3], val[4]);
 
-    temperature = (((val[0] | (int16_t)(val[1] & 0x7f) << 8)
-        - (val[1] & 0x80 ? 32767 : 0)) / 10) * 0.1;
+    temperature = (((val[0] | (int16_t)(val[1] & 0x7f) << 8) -
+        (val[1] & 0x80 ? 32767 : 0)) / 10) * 0.1;
     humidity = val[2];
 
     if (temperature > 100.0 || temperature < -50.0 || humidity > 100.0) {
@@ -197,18 +203,24 @@ static int read_attr_callback(uint16_t conn_handle, const struct ble_gatt_error 
     case GET_NAME_NUM:
         ble_hs_mbuf_to_flat(attr->om + attr->offset, g_name, MIN(om_len, sizeof(g_name)), NULL);
         ESP_LOGD(TAG, "NAME %s", g_name);
+        /* Use as serial number MAC address */
         sprintf(g_serial, "%02X%02X%02X%02X%02X%02X",
             s_addr.val[5], s_addr.val[4], s_addr.val[3],
             s_addr.val[2], s_addr.val[1], s_addr.val[0]);
+        /* Set default value for model */
         strcpy(g_model, "LYWSD03MMC");
-        strcpy(g_manufacturer, "Xiaomi");
         break;
     case GET_MODEL_NUM:
+        /* Clear possible previous value */
+        memset(g_model, 0, sizeof(g_model));
         ble_hs_mbuf_to_flat(attr->om + attr->offset, g_model, MIN(om_len, sizeof(g_model)), NULL);
         ESP_LOGD(TAG, "MODEL %s", g_model);
         break;
-    case GET_FWREV_NUM:
     case GET_SWREV_NUM:
+        /* Clear possible previous value */
+        memset(g_fwrev, 0, sizeof(g_fwrev));
+        __attribute__((fallthrough));
+    case GET_FWREV_NUM:
         ble_hs_mbuf_to_flat(attr->om + attr->offset, g_fwrev, MIN(om_len, sizeof(g_fwrev)), NULL);
         fix_revision_string(g_fwrev);
         ESP_LOGD(TAG, "FWREV %s", g_fwrev);
@@ -246,19 +258,15 @@ static bool get_advert_values(const uint8_t *val, uint16_t len)
     float temperature, humidity;
     uint32_t battery;
 
-    if (val[0] == MI_UUID_0) {
-        /* Mi like format */
-        if (len < 20) {
-            ESP_LOGD(TAG, "Incorrect data size");
-            return false;
-        }
+    ESP_LOGD(TAG, "Raw data: %02x %u", val[0], len);
 
+    if (val[0] == MI_UUID_0 && len >= 20) {
         ESP_LOGD(TAG, "Raw Mi data: %02x %02x %02x %02x %02x %02x %02x",
             val[13], val[14], val[15], val[16], val[17], val[18], val[19]);
 
         if (val[13] == 0x0d) {
-            temperature = ((val[16] | (int16_t)(val[17] & 0x7f) << 8)
-                - (val[17] & 0x80 ? 32767 : 0)) * 0.1;
+            temperature = ((val[16] | (int16_t)(val[17] & 0x7f) << 8) -
+                (val[17] & 0x80 ? 32767 : 0)) * 0.1;
             humidity = (val[18] | (uint16_t)val[19] << 8) / 10;
 
             if (temperature > 100.0 || temperature < -50.0 || humidity > 100.0) {
@@ -271,7 +279,7 @@ static bool get_advert_values(const uint8_t *val, uint16_t len)
 
             change_temperature(temperature);
             change_humidity(humidity);
-        } else {
+        } else if (val[13] == 0x0a) {
             battery = val[16];
 
             if (battery > 100) {
@@ -282,22 +290,20 @@ static bool get_advert_values(const uint8_t *val, uint16_t len)
             ESP_LOGW(TAG, "Battery=%lu", battery);
 
             change_battery(battery);
-        }
-    } else {
-        /* Custom format */
-        if (len < 11) {
-            ESP_LOGD(TAG, "Incorrect data size");
+        } else {
+            ESP_LOGD(TAG, "Unknown Mi format");
             return false;
         }
+    } else if (val[0] == ATC_UUID_0 && len == 15) {
+        ESP_LOGD(TAG, "Raw atc1441 data: %02x %02x %02x %02x %02x %02x %02x",
+            val[8], val[9], val[10], val[11], val[12], val[13], val[14]);
 
-        ESP_LOGD(TAG, "Raw ATC data: %02x %02x %02x %02x",
-            val[8], val[9], val[10], val[11]);
-
-        temperature = (float)(val[9] | (uint16_t)(val[8] & 0x7f) << 8) * 0.1;
-        humidity = (float)val[10];
+        temperature = ((val[9] | (int16_t)(val[8] & 0x7f) << 8) -
+            (val[8] & 0x80 ? 32767 : 0)) * 0.1;
+        humidity = val[10];
         battery = val[11];
 
-        if (temperature > 100.0 || humidity > 100.0 || battery > 100) {
+        if (temperature > 100.0 || temperature < -50.0 || humidity > 100.0 || battery > 100) {
             ESP_LOGD(TAG, "Incorrect sensor values");
             return false;
         }
@@ -308,6 +314,32 @@ static bool get_advert_values(const uint8_t *val, uint16_t len)
         change_temperature(temperature);
         change_humidity(humidity);
         change_battery(battery);
+    } else if (val[0] == ATC_UUID_0 && len >= 17) {
+        ESP_LOGD(TAG, "Raw pvvx data: %02x %02x %02x %02x %02x %02x %02x %02x",
+            val[8], val[9], val[10], val[11], val[12], val[13], val[14], val[15]);
+
+        temperature = (((val[8] | (int16_t)(val[9] & 0x7f) << 8) -
+            (val[9] & 0x80 ? 32767 : 0)) / 10) * 0.1;
+        humidity = (val[10] | (uint16_t)val[11] << 8) / 100;
+        battery = val[14];
+
+        ESP_LOGW(TAG, "Temperature/Humidity=%f/%f Battery=%lu",
+            temperature, humidity, battery);
+
+        if (temperature > 100.0 || temperature < -50.0 || humidity > 100.0 || battery > 100) {
+            ESP_LOGD(TAG, "Incorrect sensor values");
+            return false;
+        }
+
+        ESP_LOGW(TAG, "Temperature/Humidity=%f/%f Battery=%lu",
+            temperature, humidity, battery);
+
+        change_temperature(temperature);
+        change_humidity(humidity);
+        change_battery(battery);
+    } else {
+        ESP_LOGD(TAG, "Unknown format");
+        return false;
     }
 
     led_blink();
@@ -336,7 +368,7 @@ static bool is_sensor_found(struct ble_gap_disc_desc *disc)
         return false;
 
     /* Advertisment data in original Mi or ATC custom format */
-    if (fields.svc_data_uuid16 == NULL || fields.svc_data_uuid16_len < 14 ||
+    if (fields.svc_data_uuid16 == NULL || fields.svc_data_uuid16_len < 2 ||
     ((fields.svc_data_uuid16[0] != MI_UUID_0 || fields.svc_data_uuid16[1] != MI_UUID_1) &&
     (fields.svc_data_uuid16[0] != ATC_UUID_0 || fields.svc_data_uuid16[1] != ATC_UUID_1)))
         return false;

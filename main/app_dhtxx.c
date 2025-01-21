@@ -8,7 +8,8 @@
 #include <esp_timer.h>
 #include <esp_log.h>
 
-#define SENSOR_GET_TIMEOUT (60 * 1000000) /* 1 min in microseconds */
+/* Convert minutes in microseconds */
+#define SENSOR_GET_TIMEOUT (CONFIG_SENSOR_INQUERY_TIMEOUT * 60 * 1000000)
 
 extern char g_name[32];
 extern char g_model[32];

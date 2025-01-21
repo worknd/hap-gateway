@@ -30,8 +30,6 @@
 /* Define status of "low battery" as less 10% battery level */
 #define LOW_BATTERY(level) ((level) < 10 ? 1 : 0)
 
-extern void hap_configure_unique_param(hap_unique_param_t param);
-
 extern void app_wifi_init(void);
 extern esp_err_t app_wifi_start(TickType_t ticks_to_wait);
 extern esp_err_t app_sensor_init(TickType_t ticks_to_wait);
@@ -335,20 +333,23 @@ static void hgw_thread_entry(void *arg)
     /* Create the Services. Include the "name" since this is a user visible service  */
     temperature_service = hap_serv_temperature_sensor_create(g_temperature);
     hap_char_float_set_constraints(hap_serv_get_char_by_uuid(temperature_service,
-        HAP_CHAR_UUID_CURRENT_TEMPERATURE), -50.0, 100.0, 0.1); /* Lowest value is -50.0 */
-    hap_serv_add_char(temperature_service, hap_char_status_low_battery_create(LOW_BATTERY(g_battery)));
+        HAP_CHAR_UUID_CURRENT_TEMPERATURE), -50.0, 100.0, 0.1); /* Lowest value is changed to -50.0 */
     humidity_service = hap_serv_humidity_sensor_create(g_humidity);
-    hap_serv_add_char(temperature_service, hap_char_status_low_battery_create(LOW_BATTERY(g_battery)));
     battery_service = hap_serv_battery_service_create(g_battery, 2, LOW_BATTERY(g_battery));
 
+#if CONFIG_LOG_DEFAULT_LEVEL >= ESP_LOG_DEBUG
     /* Add service name as priv data */
     hap_serv_set_priv(temperature_service, "temperature");
     hap_serv_set_priv(humidity_service, "humidity");
     hap_serv_set_priv(battery_service, "battery");
+#endif /* CONFIG_LOG_DEFAULT_LEVEL >= ESP_LOG_DEBUG */
 
     /* Add links to the Services */
     hap_serv_mark_primary(temperature_service);
+    hap_serv_link_serv(temperature_service, humidity_service);
+    hap_serv_link_serv(temperature_service, battery_service);
     hap_serv_link_serv(humidity_service, temperature_service);
+    hap_serv_link_serv(humidity_service, battery_service);
     hap_serv_link_serv(battery_service, temperature_service);
     hap_serv_link_serv(battery_service, humidity_service);
 
@@ -416,15 +417,10 @@ void app_main()
     };
     ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
 
-    /* Configure HomeKit core to make the Accessory name (and thus the WAC SSID) unique,
-     * instead of the default configuration wherein only the WAC SSID is made unique.
-     */
-    hap_configure_unique_param(UNIQUE_NAME);
-
     /* Initialize the HAP core */
     hap_init(HAP_TRANSPORT_WIFI);
 
-    /* Register a common button for reset Wi-Fi network and reset to factory */
+    /* Register a common button for reset */
     reset_key_init(RESET_GPIO);
 
     /* Search sensor */
