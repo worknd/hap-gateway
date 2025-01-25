@@ -6,9 +6,10 @@
 
 Features of this gateway:
 
-* Support for Xiaomi 2 sensor by BLE (LYWSD03MMC)"
-* Support for DHT11/12 sensor by GPIO"
-* Support for DHT22/21 sensor by GPIO"
+* Support for Xiaomi 2 sensor by BLE (LYWSD03MMC, official and custom firmware)
+* Support for DHT11/12 sensor by GPIO
+* Support for DHT22/21 sensor by GPIO
+* Support for AHT10/20 sensor by I2C (with additional BMP280)
 
 ## Get Started
 
