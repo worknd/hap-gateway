@@ -14,6 +14,8 @@ menu "HAP-Gateway Configuration"
             bool "DHT11/12 sensor by GPIO"
         config SENSOR_DHT22
             bool "DHT22/21 sensor by GPIO"
+        config SENSOR_AHTX0
+            bool "AHT10/20 sensor by I2C"
     endchoice
 
     config SENSOR_GPIO
@@ -23,6 +25,52 @@ menu "HAP-Gateway Configuration"
         depends on (SENSOR_DHT11 || SENSOR_DHT22)
         help
             GPIO number (IOxx) to communicate with DHT11 sensor.
+
+    config I2C_PORT
+        int "I2C port number"
+        range 0 1
+        default 0
+        depends on SENSOR_AHTX0
+        help
+            I2C port number to communicate with  I2C devices.
+
+    config I2C_SCL_GPIO
+        int "SCL GPIO number"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 9
+        depends on SENSOR_AHTX0
+        help
+            GPIO number (IOxx) to communicate with I2C devices.
+
+    config I2C_SDA_GPIO
+        int "SDA GPIO number"
+        range ENV_GPIO_RANGE_MIN ENV_GPIO_OUT_RANGE_MAX
+        default 8
+        depends on SENSOR_AHTX0
+        help
+            GPIO number (IOxx) to communicate with I2C devices.
+
+    config I2C_FREQUENCY
+        int "I2C frequency"
+        range 10000 1000000
+        default 100000
+        depends on SENSOR_AHTX0
+        help
+            I2C frequency to communicate with I2C devices.
+
+    config I2C_AHTX0_ADDRESS
+        hex "I2C address of AHT10/20 sensor"
+        default 0x38
+        depends on SENSOR_AHTX0
+        help
+            I2C address of AHT10/20 sensor.
+
+    config I2C_BMP280_ADDRESS
+        hex "I2C address of BMP280 sensor"
+        default 0x77
+        depends on SENSOR_AHTX0
+        help
+            I2C address of BMP280 sensor.
 
     config BLINK_GPIO
         int "Blink GPIO number"

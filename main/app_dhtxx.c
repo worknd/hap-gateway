@@ -1,5 +1,6 @@
-/* Support for DTH11/12/21/22 temperature and humidity GPIO sensor */
+/* Support for DHT11/12/21/22 temperature and humidity GPIO sensor */
 
+#include <math.h>
 #include <string.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -40,6 +41,8 @@ static bool get_sensor_values(gpio_num_t gpio_num)
 {
     TickType_t ticks;
     uint8_t val[5] = { 0, 0, 0, 0, 0 };
+    int32_t raw_temperature;
+    uint32_t raw_humidity;
     float temperature, humidity;
 
     /* At first we send start signal to sensor */
@@ -92,24 +95,25 @@ static bool get_sensor_values(gpio_num_t gpio_num)
     }
 
 #ifdef CONFIG_SENSOR_DHT11
-    temperature = val[2];
+    raw_temperature = (int32_t)val[2] * 10 + val[3] & 0x7f;
     if (val[3] & 0x80)
-        temperature = -1.0 - temperature;
-    temperature += (val[3] & 0x0f) * 0.1;
-    humidity = val[0] + val[1] / 10;
+        raw_temperature = -raw_temperature;
+    raw_humidity = (uint32_t)val[0] * 10 + val[1];
 #else /* CONFIG_SENSOR_DHT11 */
-    temperature = (val[3] | (uint16_t)(val[2] & 0x7f) << 8) * 0.1;
+    raw_temperature = val[3] | ((int32_t)(val[2] & 0x7f) << 8);
     if (val[2] & 0x80)
-        temperature = -temperature;
-    humidity = (val[1] | (uint16_t)val[0] << 8) / 10;
+        raw_temperature = -raw_temperature;
+    raw_humidity = val[1] | ((uint32_t)val[0] << 8);
 #endif /* CONFIG_SENSOR_DHT11 */
+
+    temperature = raw_temperature * 0.1;
+    humidity = floorf(raw_humidity * 0.1 + 0.5);
+    ESP_LOGD(TAG, "Temperature/Humidity=%f/%f", temperature, humidity);
 
     if (temperature > 100.0 || temperature < -50.0 || humidity > 100.0) {
         ESP_LOGD(TAG, "Incorrect sensor values");
         return false;
     }
-
-    ESP_LOGW(TAG, "Temperature/Humidity=%f/%f", temperature, humidity);
 
     change_temperature(temperature);
     change_humidity(humidity);
