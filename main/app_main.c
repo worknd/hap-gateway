@@ -45,7 +45,9 @@ char g_hwrev[16] = "1";
 
 float g_temperature = 0.0;
 float g_humidity = 50.0;
+#ifdef CONFIG_SENSOR_XIAOMI2
 uint32_t g_battery = 100;
+#endif /* CONFIG_SENSOR_XIAOMI2 */
 
 static const char *TAG = "HGW";
 
@@ -123,6 +125,7 @@ void change_humidity(float humidity)
     }
 }
 
+#ifdef CONFIG_SENSOR_XIAOMI2
 void change_battery(uint32_t battery)
 {
     if (battery != g_battery) {
@@ -158,6 +161,7 @@ void change_battery(uint32_t battery)
         }
     }
 }
+#endif /* CONFIG_SENSOR_XIAOMI2 */
 
 /**
  * @brief The network reset button callback handler.
@@ -274,6 +278,7 @@ static int hgw_read(hap_char_t *hc, hap_status_t *status_code, void *serv_priv, 
             hap_char_update_val(hc, &new_val);
             ESP_LOGW(TAG, "Updated humidity value: %f", new_val.f);
         }
+#ifdef CONFIG_SENSOR_XIAOMI2
     } else if (!strcmp(chr_uuid, HAP_CHAR_UUID_BATTERY_LEVEL)) {
         if (cur_val->u != g_battery) {
             hap_val_t new_val = { .u = g_battery };
@@ -288,7 +293,8 @@ static int hgw_read(hap_char_t *hc, hap_status_t *status_code, void *serv_priv, 
             ESP_LOGW(TAG, "Updated low battery status: %lu", new_val.u);
         }
     } else if (!strcmp(chr_uuid, HAP_CHAR_UUID_CHARGING_STATE)) {
-        ESP_LOGD(TAG, "Charging State not updated");
+        ESP_LOGD(TAG, "Charging state not updated");
+#endif /* CONFIG_SENSOR_XIAOMI2 */
     } else {
         *status_code = HAP_STATUS_RES_ABSENT;
         return HAP_FAIL;
@@ -304,7 +310,9 @@ static void hgw_thread_entry(void *arg)
     hap_acc_t *accessory;
     hap_serv_t *temperature_service;
     hap_serv_t *humidity_service;
+#ifdef CONFIG_SENSOR_XIAOMI2
     hap_serv_t *battery_service;
+#endif /* CONFIG_SENSOR_XIAOMI2 */
     char *setup_payload;
 
     /* Initialise the mandatory parameters for Accessory which will be added as
@@ -335,33 +343,39 @@ static void hgw_thread_entry(void *arg)
     hap_char_float_set_constraints(hap_serv_get_char_by_uuid(temperature_service,
         HAP_CHAR_UUID_CURRENT_TEMPERATURE), -50.0, 100.0, 0.1); /* Lowest value is changed to -50.0 */
     humidity_service = hap_serv_humidity_sensor_create(g_humidity);
-    battery_service = hap_serv_battery_service_create(g_battery, 2, LOW_BATTERY(g_battery));
 
 #if CONFIG_LOG_DEFAULT_LEVEL >= ESP_LOG_DEBUG
     /* Add service name as priv data */
     hap_serv_set_priv(temperature_service, "temperature");
     hap_serv_set_priv(humidity_service, "humidity");
-    hap_serv_set_priv(battery_service, "battery");
 #endif /* CONFIG_LOG_DEFAULT_LEVEL >= ESP_LOG_DEBUG */
 
     /* Add links to the Services */
     hap_serv_mark_primary(temperature_service);
     hap_serv_link_serv(temperature_service, humidity_service);
-    hap_serv_link_serv(temperature_service, battery_service);
     hap_serv_link_serv(humidity_service, temperature_service);
-    hap_serv_link_serv(humidity_service, battery_service);
-    hap_serv_link_serv(battery_service, temperature_service);
-    hap_serv_link_serv(battery_service, humidity_service);
 
     /* Set the read callback for the services */
     hap_serv_set_read_cb(temperature_service, hgw_read);
     hap_serv_set_read_cb(humidity_service, hgw_read);
-    hap_serv_set_read_cb(battery_service, hgw_read);
 
     /* Add the Services to the Accessory Object */
     hap_acc_add_serv(accessory, temperature_service);
     hap_acc_add_serv(accessory, humidity_service);
+
+#ifdef CONFIG_SENSOR_XIAOMI2
+    /* Define additional service for sensor battery level */
+    battery_service = hap_serv_battery_service_create(g_battery, 2, LOW_BATTERY(g_battery));
+#if CONFIG_LOG_DEFAULT_LEVEL >= ESP_LOG_DEBUG
+    hap_serv_set_priv(battery_service, "battery");
+#endif /* CONFIG_LOG_DEFAULT_LEVEL >= ESP_LOG_DEBUG */
+    hap_serv_link_serv(temperature_service, battery_service);
+    hap_serv_link_serv(humidity_service, battery_service);
+    hap_serv_link_serv(battery_service, temperature_service);
+    hap_serv_link_serv(battery_service, humidity_service);
+    hap_serv_set_read_cb(battery_service, hgw_read);
     hap_acc_add_serv(accessory, battery_service);
+#endif /* CONFIG_SENSOR_XIAOMI2 */
 
     /* Add the Accessory to the HomeKit Database */
     hap_add_accessory(accessory);
