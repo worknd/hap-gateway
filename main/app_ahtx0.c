@@ -1,4 +1,4 @@
-/* Support for AHT10/20 temperature and humidity I2C sensor */
+/* Support for AHT10/20 (and possible BMP280) temperature and humidity I2C sensor */
 
 #include <math.h>
 #include <string.h>
@@ -8,52 +8,46 @@
 #include <esp_timer.h>
 #include <esp_log.h>
 
-#undef ESP_LOGD
-#define ESP_LOGD ESP_LOGI
-
 /* Convert minutes in microseconds */
 #define SENSOR_GET_TIMEOUT (CONFIG_SENSOR_INQUERY_TIMEOUT * 60 * 1000000)
 
 #define ROUND_TO_DECIMAL(f) (floorf((f) * 10.0 + 0.5) * 0.1)
 #define ROUND_TO_INTEGER(f) floorf((f) + 0.5)
 
+#define AHTX0_STATUS_CALIBRATED 0x08
+#define AHTX0_STATUS_BUSY       0x80
 #define AHTX0_CMD_STATUS        0x71
 #define AHTX0_CMD_MEASURE       0xac
 #define AHTX0_CMD_SOFTRESET     0xba
 #define AHT20_CMD_CALIBRATE     0xbe
 #define AHT10_CMD_CALIBRATE     0xe1
-#define AHTX0_STATUS_BUSY       0x80
-#define AHTX0_STATUS_CALIBRATED 0x08
 
 #define BMP280_REGISTER_DIG_T1    0x88
-#define BMP280_REGISTER_DIG_T2    0x8A
-#define BMP280_REGISTER_DIG_T3    0x8C
-#define BMP280_REGISTER_DIG_P1    0x8E
+#define BMP280_REGISTER_DIG_T2    0x8a
+#define BMP280_REGISTER_DIG_T3    0x8c
+#define BMP280_REGISTER_DIG_P1    0x8e
 #define BMP280_REGISTER_DIG_P2    0x90
 #define BMP280_REGISTER_DIG_P3    0x92
 #define BMP280_REGISTER_DIG_P4    0x94
 #define BMP280_REGISTER_DIG_P5    0x96
 #define BMP280_REGISTER_DIG_P6    0x98
-#define BMP280_REGISTER_DIG_P7    0x9A
-#define BMP280_REGISTER_DIG_P8    0x9C
-#define BMP280_REGISTER_DIG_P9    0x9E
-#define BMP280_REGISTER_CHIPID    0xD0
-#define BMP280_REGISTER_VERSION   0xD1
-#define BMP280_REGISTER_SOFTRESET 0xE0
-#define BMP280_REGISTER_CAL26     0xE1 /* R calibration = 0xE1-0xF0 */
-#define BMP280_REGISTER_STATUS    0xF3
-#define BMP280_REGISTER_CONTROL   0xF4
-#define BMP280_REGISTER_CONFIG    0xF5
-#define BMP280_REGISTER_PRESSURE  0xF7
-#define BMP280_REGISTER_TEMP      0xFA
-#define BMP280_MODE_SLEEP         0x00
-#define BMP280_MODE_FORCED        0x01
-#define BMP280_MODE_NORMAL        0x03
+#define BMP280_REGISTER_DIG_P7    0x9a
+#define BMP280_REGISTER_DIG_P8    0x9c
+#define BMP280_REGISTER_DIG_P9    0x9e
+#define BMP280_REGISTER_CHIPID    0xd0
+#define BMP280_REGISTER_VERSION   0xd1
+#define BMP280_REGISTER_SOFTRESET 0xe0
+#define BMP280_REGISTER_STATUS    0xf3
+#define BMP280_REGISTER_CONTROL   0xf4
+#define BMP280_REGISTER_CONFIG    0xf5
+#define BMP280_REGISTER_PRESSURE  0xf7
+#define BMP280_REGISTER_TEMP      0xfA
 #define BMP280_SOFTRESET          0xb6
 
 #define BMP280_CONFIG(s5,s2,s0) (((s5) << 5) | ((s2) << 2) | (s0))
 
 extern char g_name[32];
+extern char g_manufacturer[32];
 extern char g_model[32];
 
 extern void led_blink(void);
@@ -158,7 +152,7 @@ static bool wait_ahtx0_status(uint8_t status, uint8_t mask, uint32_t timeout)
 
 static bool init_ahtx0(bool reset)
 {
-    uint8_t val[3];
+    uint8_t buf[3];
 
     if (!s_ahtx0_handle) {
         i2c_device_config_t ahtx0_cfg = {
@@ -177,8 +171,8 @@ static bool init_ahtx0(bool reset)
         }
 
         if (reset) {
-            val[0] = AHTX0_CMD_SOFTRESET;
-            if (i2c_master_transmit(s_ahtx0_handle, val, 1, 100) != ESP_OK) {
+            buf[0] = AHTX0_CMD_SOFTRESET;
+            if (i2c_master_transmit(s_ahtx0_handle, buf, 1, 100) != ESP_OK) {
                 ESP_LOGE(TAG, "Soft reset failed");
                 return false;
             }
@@ -191,13 +185,13 @@ static bool init_ahtx0(bool reset)
 
     if (!wait_ahtx0_status(AHTX0_STATUS_CALIBRATED,
     AHTX0_STATUS_BUSY | AHTX0_STATUS_CALIBRATED, 80)) {
-        val[0] = AHT20_CMD_CALIBRATE;
-        val[1] = 0x08;
-        val[2] = 0;
-        if (i2c_master_transmit(s_ahtx0_handle, val, 3, 100) != ESP_OK) {
+        buf[0] = AHT20_CMD_CALIBRATE;
+        buf[1] = 0x08;
+        buf[2] = 0;
+        if (i2c_master_transmit(s_ahtx0_handle, buf, 3, 100) != ESP_OK) {
             /* Try command for AHT10 sensor */
-            val[0] = AHT10_CMD_CALIBRATE;
-            if (i2c_master_transmit(s_ahtx0_handle, val, 3, 100) != ESP_OK) {
+            buf[0] = AHT10_CMD_CALIBRATE;
+            if (i2c_master_transmit(s_ahtx0_handle, buf, 3, 100) != ESP_OK) {
                 ESP_LOGE(TAG, "Calibration failed");
                 return false;
             }
@@ -282,19 +276,19 @@ static bool read_ahtx0(float *ptemp, float *phumi)
 
 static bool read_bmp280_reg(uint8_t reg, void *val, size_t size)
 {
-    uint8_t val2[3];
+    uint8_t buf[3];
 
-    if (i2c_master_transmit_receive(s_bmp280_handle, &reg, 1, val2, size, 100) != ESP_OK) {
+    if (i2c_master_transmit_receive(s_bmp280_handle, &reg, 1, buf, size, 100) != ESP_OK) {
         ESP_LOGE(TAG, "Reading from reg %02x failed", reg);
         return false;
     }
 
-    /* 16-bit values in LE */
+    /* 16-bit value in LE format */
     switch (size) {
-    case 1: *(uint8_t *)val = val2[0]; break;
-    case 2: *(uint16_t *)val = ((uint16_t)val2[1] << 8) | val2[0]; break;
-    default: *(uint32_t *)val = ((uint32_t)val2[0] << 12) |
-        ((uint32_t)val2[1] << 4) | (val2[2] >> 4);
+    case 1: *(uint8_t *)val = buf[0]; break;
+    case 2: *(uint16_t *)val = ((uint16_t)buf[1] << 8) | buf[0]; break;
+    default: *(uint32_t *)val = ((uint32_t)buf[0] << 12) |
+        ((uint32_t)buf[1] << 4) | (buf[2] >> 4);
     }
 
     return true;
@@ -302,9 +296,9 @@ static bool read_bmp280_reg(uint8_t reg, void *val, size_t size)
 
 static bool write_bmp280_reg(uint8_t reg, uint8_t val)
 {
-    uint8_t val2[2] = {reg, val};
+    uint8_t buf[2] = {reg, val};
 
-    if (i2c_master_transmit(s_bmp280_handle, val2, 2, 100) != ESP_OK) {
+    if (i2c_master_transmit(s_bmp280_handle, buf, 2, 100) != ESP_OK) {
         ESP_LOGE(TAG, "Writing to reg %02x failed", reg);
         return false;
     }
@@ -312,7 +306,7 @@ static bool write_bmp280_reg(uint8_t reg, uint8_t val)
     return true;
 }
 
-static bool init_bmp280(void)
+static bool init_bmp280(bool reset)
 {
     /* Check chip ID */
     if (bmp_id && (bmp_id > 0x58 || bmp_id < 0x56))
@@ -333,6 +327,17 @@ static bool init_bmp280(void)
             ESP_LOGE(TAG, "Add device failed");
             return false;
         }
+
+        if (reset) {
+            if (!write_bmp280_reg(BMP280_REGISTER_SOFTRESET, BMP280_SOFTRESET)) {
+                ESP_LOGE(TAG, "Soft reset failed");
+                return false;
+            }
+
+            /* Wait for soft reset complete ~20ms */
+            vTaskDelay(pdMS_TO_TICKS(20));
+            ESP_LOGD(TAG, "Sensor soft reset complete");
+        }
     }
 
     /* Check chip ID */
@@ -350,7 +355,7 @@ static bool init_bmp280(void)
     }
 
     /* Read the temperature factory coefficients */
-    if (!dig_t2 && !dig_t3) {
+    if (!dig_t1) {
         if (!read_bmp280_reg(BMP280_REGISTER_DIG_T1, &dig_t1, 2) ||
         !read_bmp280_reg(BMP280_REGISTER_DIG_T2, &dig_t2, 2) ||
         !read_bmp280_reg(BMP280_REGISTER_DIG_T3, &dig_t3, 2))
@@ -369,14 +374,18 @@ static bool init_bmp280(void)
 
         if (!read_bmp280_reg(BMP280_REGISTER_DIG_P1, &dig_p1, 2))
             return false;
+
+        ESP_LOGD(TAG, "Calibration pressure data: %04x %04x %04x %04x ...",
+            dig_p1, dig_p[0], dig_p[1], dig_p[2]);
     }
 
-    /* Standby duration = 1 ms */
-    /* Filtering level for sensor data = Off */
-    /* Enables 3-wire SPI = Off */
-    /* Oversampling rate for the sensor = 16x/16x */
-    /* Operating mode for the sensor = Normal */
-    if (!write_bmp280_reg(BMP280_REGISTER_CONFIG, BMP280_CONFIG(0, 0, 0)) ||
+    /* 0: Standby duration = 0.5 ms */
+    /* 4: Filtering level for sensor data = 16 */
+    /* 0: Enables 3-wire SPI = Off */
+    /* 5: Oversampling rate for the temperature sensor = 16x */
+    /* 5: Oversampling rate for the pressure sensor = 16x */
+    /* 3: Operating mode for the sensor = Normal */
+    if (!write_bmp280_reg(BMP280_REGISTER_CONFIG, BMP280_CONFIG(0, 4, 0)) ||
     !write_bmp280_reg(BMP280_REGISTER_CONTROL, BMP280_CONFIG(5, 5, 3)))
         return false;
 
@@ -388,13 +397,61 @@ static bool init_bmp280(void)
     return true;
 }
 
+static bool read_bmp280_pressure(void)
+{
+    int32_t raw_pressure;
+    int64_t v1, v2, p;
+    float pressure;
+
+    if (!s_bmp280_handle) {
+        if (!init_bmp280(false) && !init_bmp280(false))
+            return false;
+    }
+
+    if (!read_bmp280_reg(BMP280_REGISTER_PRESSURE, &raw_pressure, 3))
+        return false;
+
+    ESP_LOGD(TAG, "Raw BMP280 pressure: %08lx", raw_pressure);
+
+    /* Don't try to understand it! */
+    v1 = ((int64_t)temp_fine) - 128000;
+    v2 = v1 * v1 * (int64_t)dig_p[4];
+    v2 = v2 + ((v1 * (int64_t)dig_p[3]) << 17);
+    v2 = v2 + (((int64_t)dig_p[2]) << 35);
+    v1 = ((v1 * v1 * (int64_t)dig_p[1]) >> 8) +((v1 * (int64_t)dig_p[0]) << 12);
+    v1 = (((((int64_t)1) << 47) + v1)) * ((int64_t)dig_p1) >> 33;
+
+    /* Because division by zero will be later */
+    if (!v1) {
+        ESP_LOGD(TAG, "Incorrect sensor values");
+        return false;
+    }
+
+    p = 1048576 - raw_pressure;
+    p = (((p << 31) - v2) * 3125) / v1;
+    v1 = (((int64_t)dig_p[7]) * (p >> 13) * (p >> 13)) >> 25;
+    v2 = (((int64_t)dig_p[6]) * p) >> 19;
+    p = ((p + v1 + v2) >> 8) + (((int64_t)dig_p[5]) << 4);
+
+    pressure = ROUND_TO_DECIMAL((p >> 8) * 0.01);
+    ESP_LOGW(TAG, "Pressure=%f(hPa) %.1f(cmHg)",
+        pressure, pressure * 0.750062);
+
+    if (pressure > 1100.0 || pressure < 300.0) {
+        ESP_LOGD(TAG, "Incorrect sensor values");
+        return false;
+    }
+
+    return true;
+}
+
 static bool read_bmp280(float *ptemp)
 {
     int32_t raw_temperature;
     float temperature;
 
     if (!s_bmp280_handle) {
-        if (!init_bmp280())
+        if (!init_bmp280(false))
             return false;
     }
 
@@ -423,50 +480,6 @@ static bool read_bmp280(float *ptemp)
     return true;
 }
 
-static bool read_bmp280_pressure(void)
-{
-    int32_t raw_pressure;
-    int64_t v1, v2, p;
-    float pressure;
-
-    if (!s_bmp280_handle) {
-        if (!init_bmp280())
-            return false;
-    }
-
-    if (!read_bmp280_reg(BMP280_REGISTER_PRESSURE, &raw_pressure, 3))
-        return false;
-
-    ESP_LOGD(TAG, "Raw BMP280 pressure: %08lx", raw_pressure);
-
-    /* Don't try to understand it! */
-    v1 = ((int64_t)temp_fine) - 128000;
-    v2 = v1 * v1 * (int64_t)dig_p[4];
-    v2 = v2 + ((v1 * (int64_t)dig_p[3]) << 17);
-    v2 = v2 + (((int64_t)dig_p[2]) << 35);
-    v1 = ((v1 * v1 * (int64_t)dig_p[1]) >> 8) +
-        ((v1 * (int64_t)dig_p[0]) << 12);
-    v1 = (((((int64_t)1) << 47) + v1)) *
-        ((int64_t)dig_p1) >> 33;
-
-    /* Because division by zero later */
-    if (!v1) {
-        ESP_LOGD(TAG, "Incorrect sensor values");
-        return false;
-    }
-
-    p = 1048576 - raw_pressure;
-    p = (((p << 31) - v2) * 3125) / v1;
-    v1 = (((int64_t)dig_p[7]) * (p >> 13) * (p >> 13)) >> 25;
-    v2 = (((int64_t)dig_p[6]) * p) >> 19;
-    p = ((p + v1 + v2) >> 8) + (((int64_t)dig_p[5]) << 4);
-
-    pressure = ROUND_TO_DECIMAL((p >> 8) * 0.01);
-    ESP_LOGW(TAG, "Pressure=%f(hPa) %.1f(cmHg)",
-        pressure, pressure * 0.750062);
-
-    return true;
-}
 
 static bool get_sensor_values(bool repeat)
 {
@@ -525,7 +538,14 @@ esp_err_t app_sensor_init(TickType_t ticks_to_wait)
     }
 
     strcpy(g_name, "AHTx0");
+    strcpy(g_manufacturer, "ASAIR");
     strcpy(g_model, "AHTx0");
+
+    if (bmp_id >= 0x56 && bmp_id <= 0x58) {
+        strcat(g_name, "+BMP280");
+        strcat(g_manufacturer, "+Bosch");
+        strcat(g_model, "+BMP280");
+    }
 
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(timer, SENSOR_GET_TIMEOUT));
@@ -535,5 +555,14 @@ esp_err_t app_sensor_init(TickType_t ticks_to_wait)
 
 void app_sensor_reset(bool full)
 {
-    (void)full;
+    bmp_id = 0;
+    dig_t1 = 0;
+    dig_p1 = 0;
+
+    if (full) {
+        fini_i2c_bus();
+        init_ahtx0(true);
+        init_bmp280(true);
+        fini_i2c_bus();
+    }
 }

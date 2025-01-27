@@ -19,7 +19,7 @@
 
 #define WIFI_CONNECTED_EVENT BIT0
 
-static const char *TAG = "HGWF";
+static const char *TAG = "WF";
 static EventGroupHandle_t wifi_event_group;
 
 char unique_hostname[32];
