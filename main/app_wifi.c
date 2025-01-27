@@ -10,6 +10,8 @@
 #include <freertos/task.h>
 #include <freertos/event_groups.h>
 #include <esp_wifi.h>
+#include <esp_rrm.h>
+#include <esp_wnm.h>
 #include <esp_event.h>
 #include <esp_log.h>
 #include <esp_mac.h>
@@ -28,19 +30,28 @@ char unique_hostname[32];
 static void event_handler(void* arg, esp_event_base_t event_base,
     int32_t event_id, void* event_data)
 {
+    bool rrm_support, btm_support;
+
     if (event_base == WIFI_EVENT) {
         switch (event_id) {
         case WIFI_EVENT_STA_START:
             esp_wifi_connect();
             break;
         case WIFI_EVENT_STA_CONNECTED:
+            rrm_support = esp_rrm_is_rrm_supported_connection();
+            btm_support = esp_wnm_is_btm_supported_connection();
+            if (rrm_support || btm_support) {
+                ESP_LOGW(TAG, "Station has connected to AP that supports%s%s%s",
+                    rrm_support ? " RRM" : "", rrm_support || btm_support ? " and" : "",
+                    btm_support ? " BTM" : "");
+            }
             esp_netif_create_ip6_linklocal((esp_netif_t *)arg);
             break;
         case WIFI_EVENT_STA_DISCONNECTED:
             if (((wifi_event_sta_disconnected_t *)event_data)->reason == WIFI_REASON_ROAMING) {
-                ESP_LOGI(TAG, "Station roaming, do nothing");
+                ESP_LOGW(TAG, "Station roaming, do nothing");
             } else {
-                ESP_LOGI(TAG, "Disconnected. Connecting to the AP again...");
+                ESP_LOGW(TAG, "Disconnected. Connecting to the AP again...");
                 esp_wifi_connect();
             }
             break;
@@ -88,7 +99,7 @@ void app_wifi_init(void)
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 }
 
-esp_err_t app_wifi_start(TickType_t ticks_to_wait)
+void app_wifi_start(void)
 {
     wifi_config_t wifi_config = {
         .sta = {
@@ -114,9 +125,8 @@ esp_err_t app_wifi_start(TickType_t ticks_to_wait)
     ESP_ERROR_CHECK(esp_wifi_start());
 
     /* Wait for Wi-Fi connection */
-    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, false, true, ticks_to_wait);
+    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT,
+        pdFALSE, pdTRUE, portMAX_DELAY);
 
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_MAX_MODEM));
-
-    return ESP_OK;
 }

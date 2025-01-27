@@ -31,8 +31,8 @@
 #define LOW_BATTERY(level) ((level) < 10 ? 1 : 0)
 
 extern void app_wifi_init(void);
-extern esp_err_t app_wifi_start(TickType_t ticks_to_wait);
-extern esp_err_t app_sensor_init(TickType_t ticks_to_wait);
+extern void app_wifi_start(void);
+extern void app_sensor_init(void);
 extern void app_sensor_addr_save(void);
 extern void app_sensor_reset(bool full);
 
@@ -414,7 +414,7 @@ static void hgw_thread_entry(void *arg)
     app_sensor_addr_save();
 
     /* Start Wi-Fi */
-    app_wifi_start(portMAX_DELAY);
+    app_wifi_start();
 
     led_blink();
 
@@ -424,12 +424,22 @@ static void hgw_thread_entry(void *arg)
 
 void app_main()
 {
+    hap_cfg_t hap_cfg;
     esp_pm_config_t pm_config = {
         .max_freq_mhz = 160,
         .min_freq_mhz = 80,
         .light_sleep_enable = false
     };
+
     ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
+
+    /* Configure some parameters for HomeKit core */
+    hap_get_config(&hap_cfg);
+    hap_cfg.max_event_notif_chars = 6;
+    hap_cfg.recv_timeout = 6;
+    hap_cfg.send_timeout = 6;
+    hap_cfg.sw_token_max_len = 512;
+    hap_set_config(&hap_cfg);
 
     /* Initialize the HAP core */
     hap_init(HAP_TRANSPORT_WIFI);
@@ -437,8 +447,8 @@ void app_main()
     /* Register a common button for reset */
     reset_key_init(RESET_GPIO);
 
-    /* Search sensor */
-    app_sensor_init(portMAX_DELAY);
+    /* Search and initialize sensor */
+    app_sensor_init();
 
     xTaskCreate(hgw_thread_entry, TAG, HGW_TASK_STACKSIZE, NULL, HGW_TASK_PRIORITY, NULL);
 }

@@ -17,6 +17,9 @@
 
 #include <hap_platform_keystore.h>
 
+#undef ESP_LOGD
+#define ESP_LOGD ESP_LOGI
+
 #ifndef MIN
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 #endif
@@ -31,8 +34,8 @@
 #define SENSOR_INFO_BIT  BIT1
 #define SENSOR_GOT_BIT   BIT2
 
-#define SENSOR_KEYSTORE  "sensor"
-#define SENSOR_ADDR_KEY  "address"
+#define SENSOR_KEYSTORE_NAMESPACE "mi_sensor"
+#define SENSOR_ADDRESS_KEY        "ble_address"
 
 #define MI_UUID_0  0x95
 #define MI_UUID_1  0xfe
@@ -54,7 +57,7 @@ extern void change_temperature(float temperature);
 extern void change_humidity(float humidity);
 extern void change_battery(uint32_t battery);
 
-static const char *TAG = "MI2";
+static const char *TAG = "MI";
 
 static ble_addr_t s_addr = {BLE_ADDR_PUBLIC};
 
@@ -82,32 +85,13 @@ static const ble_uuid_t *uuids[] = {
 static EventGroupHandle_t s_sensor_event_group;
 static int event_ble_handler(struct ble_gap_event *event, void *arg);
 
-void app_sensor_addr_save(void)
-{
-    bool need_save = true;
-    const char *part_name = hap_platform_keystore_get_nvs_partition_name();
-    size_t addr_size = sizeof(s_addr);
-    ble_addr_t addr;
-
-    if (!hap_platform_keystore_get(part_name, SENSOR_KEYSTORE, SENSOR_ADDR_KEY,
-    (uint8_t *)&addr, &addr_size) && addr_size == sizeof(s_addr)) {
-        need_save = !!memcmp(&s_addr, &addr, sizeof(s_addr));
-    }
-
-    if (need_save) {
-        hap_platform_keystore_set(part_name, SENSOR_KEYSTORE,
-            SENSOR_ADDR_KEY, (uint8_t *)&s_addr, sizeof(s_addr));
-        ESP_LOGD(TAG, "Sensor address saved");
-    }
-}
-
-static void app_sensor_addr_load(void)
+static void sensor_addr_load(void)
 {
     const char *part_name = hap_platform_keystore_get_nvs_partition_name();
     size_t addr_size = sizeof(s_addr);
 
-    if (!hap_platform_keystore_get(part_name, SENSOR_KEYSTORE, SENSOR_ADDR_KEY,
-    (uint8_t *)&s_addr, &addr_size) && addr_size == sizeof(s_addr)) {
+    if (!hap_platform_keystore_get(part_name, SENSOR_KEYSTORE_NAMESPACE,
+    SENSOR_ADDRESS_KEY, (uint8_t *)&s_addr, &addr_size) && addr_size == sizeof(s_addr)) {
         xEventGroupSetBits(s_sensor_event_group, SENSOR_FOUND_BIT);
         ESP_LOGD(TAG, "Sensor address loaded");
     }
@@ -337,6 +321,10 @@ static bool get_advert_values(const uint8_t *val, uint16_t len)
             ESP_LOGD(TAG, "Incorrect sensor values");
             return false;
         }
+
+        change_temperature(temperature);
+        change_humidity(humidity);
+        change_battery(battery);
     } else {
         ESP_LOGD(TAG, "Unknown format");
         return false;
@@ -513,9 +501,8 @@ static void on_timer(void* arg)
 {
     ESP_LOGD(TAG, "Time to refresh sensor values");
 
-    xEventGroupClearBits(s_sensor_event_group, SENSOR_GOT_BIT);
-
     if (!ble_gap_disc_active()) {
+        xEventGroupClearBits(s_sensor_event_group, SENSOR_GOT_BIT);
         start_ble_scan();
     }
 }
@@ -530,7 +517,7 @@ static void host_nimble_task(void *param)
     ESP_LOGE(TAG, "BLE host task finished.");
 }
 
-esp_err_t app_sensor_init(TickType_t ticks_to_wait)
+void app_sensor_init(void)
 {
     uint8_t mac[6];
     char unique_hostname[32];
@@ -556,32 +543,49 @@ esp_err_t app_sensor_init(TickType_t ticks_to_wait)
     ESP_ERROR_CHECK(ble_svc_gap_device_name_set(unique_hostname));
 
     /* Try to load sensor address from NVS */
-    app_sensor_addr_load();
+    sensor_addr_load();
 
     nimble_port_freertos_init(host_nimble_task);
 
-    xEventGroupWaitBits(s_sensor_event_group, SENSOR_INFO_BIT,
-        pdFALSE, pdFALSE, ticks_to_wait);
+    xEventGroupWaitBits(s_sensor_event_group, SENSOR_FOUND_BIT |
+        SENSOR_INFO_BIT | SENSOR_GOT_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
 
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(timer, SENSOR_GET_TIMEOUT));
+}
 
-    return ESP_OK;
+void app_sensor_addr_save(void)
+{
+    bool need_save = true;
+    const char *part_name = hap_platform_keystore_get_nvs_partition_name();
+    size_t addr_size = sizeof(s_addr);
+    ble_addr_t addr;
+
+    if (!hap_platform_keystore_get(part_name, SENSOR_KEYSTORE_NAMESPACE,
+    SENSOR_ADDRESS_KEY, (uint8_t *)&addr, &addr_size) && addr_size == sizeof(s_addr)) {
+        need_save = !!memcmp(&s_addr, &addr, sizeof(s_addr));
+    }
+
+    if (need_save) {
+        hap_platform_keystore_set(part_name, SENSOR_KEYSTORE_NAMESPACE,
+            SENSOR_ADDRESS_KEY, (uint8_t *)&s_addr, sizeof(s_addr));
+        ESP_LOGD(TAG, "Sensor address saved");
+    }
 }
 
 void app_sensor_reset(bool full)
 {
-    int mask = SENSOR_INFO_BIT | SENSOR_GOT_BIT;
+    uint32_t clear_bits = SENSOR_INFO_BIT | SENSOR_GOT_BIT;
 
     if (full) {
         hap_platform_keystore_delete_namespace(
             hap_platform_keystore_get_nvs_partition_name(),
-            SENSOR_KEYSTORE);
-        mask |= SENSOR_FOUND_BIT;
+            SENSOR_KEYSTORE_NAMESPACE);
+        clear_bits |= SENSOR_FOUND_BIT;
         ESP_LOGD(TAG, "Sensor address deleted");
     }
 
-    xEventGroupClearBits(s_sensor_event_group, mask);
+    xEventGroupClearBits(s_sensor_event_group, clear_bits);
 
     if (ble_gap_conn_active()) {
         ble_gap_conn_cancel();

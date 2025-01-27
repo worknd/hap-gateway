@@ -21,10 +21,6 @@ extern void change_humidity(float humidity);
 
 static const char *TAG = "DHT";
 
-void app_sensor_addr_save(void)
-{
-}
-
 static uint32_t wait_gpio_level(gpio_num_t gpio_num, uint32_t usec, uint32_t level)
 {
     for (uint32_t i = 1; i <= usec; i++) {
@@ -95,7 +91,7 @@ static bool get_sensor_values(gpio_num_t gpio_num)
     }
 
 #ifdef CONFIG_SENSOR_DHT11
-    raw_temperature = (int32_t)val[2] * 10 + val[3] & 0x7f;
+    raw_temperature = (int32_t)val[2] * 10 + (val[3] & 0x7f);
     if (val[3] & 0x80)
         raw_temperature = -raw_temperature;
     raw_humidity = (uint32_t)val[0] * 10 + val[1];
@@ -130,7 +126,7 @@ static void on_timer(void* arg)
     get_sensor_values(CONFIG_SENSOR_GPIO);
 }
 
-esp_err_t app_sensor_init(TickType_t ticks_to_wait)
+void app_sensor_init(void)
 {
     esp_timer_handle_t timer;
     esp_timer_create_args_t timer_args = {
@@ -155,8 +151,10 @@ esp_err_t app_sensor_init(TickType_t ticks_to_wait)
 
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(timer, SENSOR_GET_TIMEOUT));
+}
 
-    return ESP_OK;
+void app_sensor_addr_save(void)
+{
 }
 
 void app_sensor_reset(bool full)
